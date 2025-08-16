@@ -62,6 +62,7 @@ DWORD __cdecl _PageCommit(ULONG page, ULONG npages, ULONG hpd, ULONG pagerdata, 
 DWORD __cdecl _PageCommitPhys(ULONG page, ULONG npages, ULONG physpg, ULONG flags);
 DWORD __cdecl _PageReAllocate(ULONG hMem, ULONG nPages, ULONG flags);
 DWORD __cdecl _PageCommitContig(ULONG page, ULONG npages, ULONG flags, ULONG alignmask, ULONG minphys, ULONG maxphys);
+DWORD __cdecl _PageDecommit(ULONG page, ULONG npages, ULONG flags);
 DWORD __cdecl _LinMapIntoV86(ULONG HLinPgNum, ULONG VM, ULONG VMLinPgNum, ULONG nPages, ULONG flags);
 DWORD __cdecl _MapIntoV86(ULONG hMem, ULONG VM, ULONG VMLinPgNum, ULONG nPages, ULONG PageOff, ULONG flags);
 DWORD __cdecl _Allocate_Global_V86_Data_Area(ULONG nBytes, ULONG flags);

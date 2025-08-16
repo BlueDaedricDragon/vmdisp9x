@@ -111,6 +111,13 @@ const static opengl_icd_t vmwsvga_icd = {
   "VMWSVGA"
 };
 
+/* Mesa3D VirGL OpengGL */
+const static opengl_icd_t virgl_icd = {
+  0x2,
+  0x1,
+  "VIRGL"
+};
+
 /* VIDEOPARAMETERS */
 static VIDEOPARAMETERS_t tvsetup = {
   {0x02C62061UL, 0x1097, 0x11d1, 0x92, 0x0F, 0x00, 0xA0, 0x24, 0xDF, 0x15, 0x6E},
@@ -214,6 +221,11 @@ LONG WINAPI __loadds Control(LPVOID lpDevice, UINT function,
       if((hda->flags & FB_ACCEL_VMSVGA3D) && ((hda->flags & FB_FORCE_SOFTWARE) == 0))
       {
         _fmemcpy(lpOutput, &vmwsvga_icd, OPENGL_ICD_SIZE);
+        rc = 1;
+      }
+      else if((hda->flags & FB_ACCEL_VIRGL) && ((hda->flags & FB_FORCE_SOFTWARE) == 0))
+      {
+        _fmemcpy(lpOutput, &virgl_icd, OPENGL_ICD_SIZE);
         rc = 1;
       }
       else if((hda->flags & FB_ACCEL_QEMU3DFX) && ((hda->flags & FB_FORCE_SOFTWARE) == 0))

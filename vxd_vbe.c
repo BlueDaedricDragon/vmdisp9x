@@ -150,10 +150,12 @@ BOOL VBE_init_hw()
  	dbg_printf(dbg_vbe_init, vram_phy, vram_size);
  	
 	hda->vram_size = vram_size;
-	hda->vram_bar_size = vram_size;
+	hda->vram_size_bar = vram_size;
+	hda->vram_size_virt = vram_size;
 
 	hda->vram_pm32 = (void*)_MapPhysToLinear(vram_phy, vram_size, 0);
 	hda->flags    |= FB_SUPPORT_FLIPING;
+	hda->vram_phylin = hda->vram_pm32;
 
 #ifndef QEMU
 	FBHDA_memtest();
@@ -303,23 +305,28 @@ DWORD FBHDA_palette_get(unsigned char index)
 	return (r << 16) | (g << 8) | b;
 }
 
-BOOL FBHDA_swap(DWORD offset)
+BOOL FBHDA_swap(DWORD offset, DWORD flags)
 {
 	DWORD ps = ((hda->bpp+7)/8);
 	DWORD offset_y = offset/hda->pitch;
 	DWORD offset_x = (offset % hda->pitch)/ps;
-	
+
+	if((flags & FBHDA_SWAP_QUERY) != 0)
+	{
+		return TRUE;
+	}
+
 	if(offset + hda->stride > hda->vram_size) return FALSE; /* if exceed VRAM */
-		
+
 	FBHDA_access_begin(0);
-	
+
 	outpw(VBE_DISPI_IOPORT_INDEX, VBE_DISPI_INDEX_Y_OFFSET);
 	outpw(VBE_DISPI_IOPORT_DATA, (WORD)offset_y);
 	outpw(VBE_DISPI_IOPORT_INDEX, VBE_DISPI_INDEX_X_OFFSET);
 	outpw(VBE_DISPI_IOPORT_DATA, (WORD)offset_x);
-	
+
 	hda->surface = offset;
-	
+
 	FBHDA_access_end(0);
 
 	return TRUE;

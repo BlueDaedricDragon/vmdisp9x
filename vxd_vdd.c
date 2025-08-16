@@ -372,7 +372,7 @@ For performance reasons, you should implement this function.
 **/
 VDDPROC(GET_TOTAL_VRAM_SIZE, get_total_vram_size)
 {
-	state->Client_ECX = hda->vram_size;
+	state->Client_ECX = hda->vram_size_virt;
 	VDD_CY;
 }
 

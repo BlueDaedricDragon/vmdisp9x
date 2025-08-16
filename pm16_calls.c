@@ -207,25 +207,30 @@ void FBHDA_access_rect(DWORD left, DWORD top, DWORD right, DWORD bottom)
 	}
 }
 
-BOOL FBHDA_swap(DWORD offset)
+BOOL FBHDA_swap(DWORD offset, DWORD flags)
 {
 	static DWORD sOffset;
+	static DWORD sFlags;
 	static BOOL status;
 	sOffset = offset;
+	sFlags  = flags;
 	status = FALSE;
-	
+
 	_asm
 	{
 		.386
 		push eax
 		push edx
 		push ecx
+		push esi
 		
 	  mov edx, OP_FBHDA_SWAP
-	  mov ecx, [sOffset]
+	  mov ecx, [sFlags]
+	  mov esi, [sOffset]
 	  call dword ptr [VXD_VM]
 	  mov [status], cx
-	  
+
+	  pop esi
 	  pop ecx
 		pop edx
 		pop eax

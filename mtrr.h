@@ -32,8 +32,8 @@ THE SOFTWARE.
 #define MTRR__MTRRIsPatSupported 2
 #define MTRR__MTRR_PowerState_Change 3
 
-DWORD __cdecl MTRR_GetVersion();
-DWORD __cdecl MTRR_SetPhysicalCacheTypeRange(DWORD PhysicalAddress, DWORD reserved, DWORD NumberOfBytes, DWORD CacheType);
+DWORD __stdcall MTRR_GetVersion();
+DWORD __stdcall MTRR_SetPhysicalCacheTypeRange(DWORD PhysicalAddress, DWORD reserved, DWORD NumberOfBytes, DWORD CacheType);
 
 #define MTRR_STATUS_SUCCESS         0x00000000UL
 #define MTRR_STATUS_NO_SUCH_DEVICE  0xC000000EUL

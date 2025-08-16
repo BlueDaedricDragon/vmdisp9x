@@ -586,9 +586,11 @@ BOOL SVGA_init_hw()
 		/* fill address in FBHDA */
 		hda->vram_pm32 = (void*)gSVGA.fbLinear;
 		hda->vram_size = gSVGA.vramSize;
-		hda->vram_bar_size = gSVGA.vramSize;
+		hda->vram_size_bar = gSVGA.vramSize;
+		hda->vram_size_virt = conf_vram_limit*1024*1024;
 		hda->vram_pm16 = fb_pm16;
-		
+		hda->vram_phylin = hda->vram_pm32; /* no fb buffer emulation */
+
  		memcpy(hda->vxdname, SVGA_vxd_name, sizeof(SVGA_vxd_name));
 		
 		hda->flags |= FB_ACCEL_VMSVGA;
@@ -1134,9 +1136,14 @@ BOOL SVGA_valid()
 	return SVGA_is_valid;
 }
 
-BOOL FBHDA_swap(DWORD offset)
+BOOL FBHDA_swap(DWORD offset, DWORD flags)
 {
 	BOOL rc = FALSE;
+
+	if((flags & FBHDA_SWAP_QUERY) != 0)
+	{
+		return TRUE;
+	}
 
 	if(hda->overlay > 0)
 	{

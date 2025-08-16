@@ -394,7 +394,7 @@ WORD __stdcall VXD_API_Proc(PCRS_32 state)
 		case OP_FBHDA_SWAP:
 			{
 				BOOL rs;
-				rs = FBHDA_swap(state->Client_ECX);
+				rs = FBHDA_swap(state->Client_ESI, state->Client_ECX);
 				state->Client_ECX = (DWORD)rs;
 				rc = 1;
 				break;
@@ -841,7 +841,7 @@ DWORD __stdcall Device_IO_Control_proc(DWORD vmhandle, struct DIOCParams *params
 			rc = 0;
 			break;
 		case OP_FBHDA_SWAP:
-			outBuf[0] = FBHDA_swap(inBuf[0]);
+			outBuf[0] = FBHDA_swap(inBuf[0], inBuf[1]);
 			rc = 0;
 			break;
 		case OP_FBHDA_CLEAN:

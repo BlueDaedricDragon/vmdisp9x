@@ -547,6 +547,11 @@ DWORD __declspec(naked) __cdecl _PageCommitContig(ULONG page, ULONG npages, ULON
 	VMMJmp(_PageCommitContig);
 }
 
+DWORD __declspec(naked) __cdecl _PageDecommit(ULONG page, ULONG npages, ULONG flags)
+{
+	VMMJmp(_PageDecommit);
+}
+
 DWORD __declspec(naked) __cdecl _LinMapIntoV86(ULONG HLinPgNum, ULONG VM, ULONG VMLinPgNum, ULONG nPages, ULONG flags)
 {
 	VMMJmp(_LinMapIntoV86);

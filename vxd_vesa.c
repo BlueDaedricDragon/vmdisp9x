@@ -67,6 +67,9 @@ static DWORD vesa_modes_cnt = 0;
 WORD vesa_version = 0;
 static DWORD vesa_caps = 0;
 static int act_mode = -1;
+static BOOL exclusive_mode = FALSE;
+static BOOL vga_mode = TRUE;
+static BOOL mttr_was_set = FALSE;
 
 /* access rect */
 static DWORD rect_left;
@@ -126,6 +129,7 @@ static BOOL vesa_valid = FALSE;
 
 static DWORD conf_dos_window = 0;
 static DWORD conf_hw_double_buf = 2;
+static DWORD conf_mtrr = 1;
 
 #define SCREEN_EMULATED_CENTER 0
 #define SCREEN_EMULATED_COPY   1
@@ -160,14 +164,86 @@ static void alloc_modes_info(DWORD cnt)
 	vesa_modes_cnt = 0;
 }
 
+DWORD ram_phy = 0;
+DWORD vram_phy = 0;
+DWORD vram_lin = 0;
+DWORD shadow_pages = 0;
+
+#define VMEM_FLAGS (PC_INCR|PC_USER|PC_WRITEABLE)
+
+static BOOL shadow_alloc(DWORD size)
+{
+	DWORD pages = size/P_SIZE;
+	DWORD free_pages = _GetFreePageCount(0);
+	
+	if((free_pages*2) >= pages) /* we need twice memory than shadow buffer */
+	{
+		ram_phy = _PageCommitContig(0, pages, PCC_NOLIN, 0x03, 0, -1);
+		if(ram_phy != 0xFFFFFFFF)
+		{
+			vram_lin = _PageReserve(PR_SYSTEM, pages, PR_FIXED);
+			if(vram_lin != 0xFFFFFFFF)
+			{
+				_PageCommitPhys(vram_lin/P_SIZE, pages, ram_phy/P_SIZE, VMEM_FLAGS);
+				dbg_printf("_PageCommitPhys(..., %ld, %lX, ...)\n", pages, ram_phy);
+	
+				shadow_pages = pages;
+				return TRUE;
+			}
+		}
+	}
+
+	vram_lin = 0;
+	return FALSE;
+}
+
+static void shadow_remap()
+{
+	if(vram_lin)
+	{
+		DWORD stride_pages = (hda->stride + P_SIZE - 1) / P_SIZE;
+		dbg_printf("_PageDecommit(%lX, %d, 0)\n", vram_lin/P_SIZE, shadow_pages);
+		//_PageDecommit(vram_lin/P_SIZE, shadow_pages, 0);
+		if(screen_mode >= SCREEN_FLIP)
+		{
+			/* when multiple buffering (flip) is supported, shadowing system area, other surfaces keep in vram */
+			if(!exclusive_mode)
+			{
+				DWORD pages_ram = stride_pages;
+				DWORD pages_vram = shadow_pages - pages_ram;
+				_PageCommitPhys(vram_lin/P_SIZE, pages_ram, ram_phy/P_SIZE, VMEM_FLAGS);
+				_PageCommitPhys((vram_lin/P_SIZE)+stride_pages, pages_vram, (vram_phy/P_SIZE)+stride_pages, VMEM_FLAGS);
+				dbg_printf("_PageCommitPhys >= SCREEN_FLIP (normal)\n");
+			}
+			else
+			{
+				_PageCommitPhys((vram_lin/P_SIZE), shadow_pages, (vram_phy/P_SIZE), VMEM_FLAGS);
+			}
+		}
+		else
+		{
+			/* when using flip emulation, shadow all vram but keep visible area in VRAM */
+			DWORD pages_ram = shadow_pages - stride_pages;
+			DWORD pages_vram = stride_pages;
+	
+			dbg_printf("_PageCommitPhys < SCREEN_FLIP\n");
+	
+			_PageCommitPhys(vram_lin/P_SIZE, pages_vram, vram_phy/P_SIZE, VMEM_FLAGS);
+			_PageCommitPhys((vram_lin/P_SIZE)+stride_pages, pages_ram, (ram_phy/P_SIZE)+stride_pages, VMEM_FLAGS);
+		}
+	
+		dbg_printf("shadow_remap SUCC\n");
+	}
+}
+
 static char VESA_conf_path[] = "Software\\vmdisp9x\\vesa";
 
 BOOL VESA_init_hw()
 {
 	DWORD flat;
 	DWORD conf_vram_limit = 128;
-	DWORD conf_mtrr = 1;
-	DWORD conf_no_memtest = 0;
+	DWORD conf_no_memtest = 1;
+	DWORD conf_shadow_mb = 32;
 	
 	dbg_printf("VESA init begin...\n");
 
@@ -179,6 +255,11 @@ BOOL VESA_init_hw()
 
 	flat = _PageAllocate(1, PG_SYS, 0, 0x0, 0, 0x100000, &vesa_buf_phy, PAGEUSEALIGN | PAGECONTIG | PAGEFIXED);
 	vesa_buf = (void*)flat;
+	
+	if(!shadow_alloc(conf_shadow_mb*1024*1024))
+	{
+		dbg_printf("cannot allocated %d MB RAM!\n", conf_shadow_mb);
+	}
 
 	if(vesa_buf)
 	{
@@ -262,6 +343,14 @@ BOOL VESA_init_hw()
 							m->phy     = modeinfo->PhysBasePtr;
 							m->mode_id = modes[i];
 							m->flags   = modeinfo->ModeAttributes;
+							if(m->bpp == 16)
+							{
+								if(modeinfo->GreenMaskSize == 5)
+								{
+									m->bpp = 15;
+								}
+							}
+
 							vesa_modes_cnt++;
 
 							if(m->phy)
@@ -293,34 +382,28 @@ BOOL VESA_init_hw()
 
 		 		memcpy(hda->vxdname, vesa_vxd_name, sizeof(vesa_vxd_name));
 				hda->vram_size = info->TotalMemory * 0x10000UL;
-				if(hda->vram_size > conf_vram_limit*1024*1024)
+				if(hda->vram_size > (conf_vram_limit*1024*1024))
 				{
 					hda->vram_size = conf_vram_limit*1024*1024;
 				}
 
-				hda->vram_bar_size = hda->vram_size;
+				hda->vram_size_bar = hda->vram_size;
+				hda->vram_size_virt = conf_vram_limit*1024*1024;
 
 				if(fb_phy == 0xFFFFFFFF)
 				{
 					fb_phy = ISA_LFB;
 				}
-
-				hda->vram_pm32 = (void*)_MapPhysToLinear(fb_phy, hda->vram_size, 0);
-
-				if(conf_mtrr)
+				
+				vram_phy = fb_phy;
+				hda->vram_phylin = (void*)_MapPhysToLinear(vram_phy, hda->vram_size, 0);
+				if(vram_lin)
 				{
-					if(fb_phy > 1*1024*1024)
-					{
-						if(MTRR_GetVersion())
-						{
-							dbg_printf("MTRR supported\n");
-							MTRR_SetPhysicalCacheTypeRange(fb_phy, 0, hda->vram_size, MTRR_FRAMEBUFFERCACHED);
-						}
-						else
-						{
-							dbg_printf("MTRR unsupported\n");
-						}
-					}
+					hda->vram_pm32   = (void*)vram_lin;
+				}
+				else
+				{
+					hda->vram_pm32   = hda->vram_phylin;
 				}
 
 				hda->flags |= FB_SUPPORT_FLIPING | FB_VESA_MODES;
@@ -367,7 +450,8 @@ BOOL VESA_validmode(DWORD w, DWORD h, DWORD bpp)
 
 void VESA_clear()
 {
-	memset((BYTE*)hda->vram_pm32+hda->system_surface, 0, hda->pitch*hda->height);
+	memset((BYTE*)hda->vram_pm32+hda->system_surface, 0, hda->stride);
+	dbg_printf("Clear success\n");
 }
 
 BOOL VESA_setmode_phy(DWORD w, DWORD h, DWORD bpp, DWORD rr_min, DWORD rr_max)
@@ -508,10 +592,33 @@ BOOL VESA_setmode_phy(DWORD w, DWORD h, DWORD bpp, DWORD rr_min, DWORD rr_max)
 	return FALSE;
 }
 
+static void mtrr_setup()
+{
+	if(conf_mtrr && !mttr_was_set)
+	{
+		if(vram_phy > 1*1024*1024)
+		{
+			if(MTRR_GetVersion())
+			{
+				dbg_printf("MTRR supported\n");
+				dbg_printf("MTRR_SetPhysicalCacheTypeRange(%lX, 0, %ld, %ld)\n", vram_phy, hda->vram_size, MTRR_FRAMEBUFFERCACHED);
+				MTRR_SetPhysicalCacheTypeRange(vram_phy, 0, hda->vram_size, MTRR_FRAMEBUFFERCACHED);
+				mttr_was_set = TRUE;
+			}
+			else
+			{
+				dbg_printf("MTRR unsupported\n");
+			}
+		}
+	}
+}
+
 BOOL VESA_setmode(DWORD w, DWORD h, DWORD bpp, DWORD rr_min, DWORD rr_max)
 {
 	if(VESA_setmode_phy(w, h, bpp, rr_min, rr_max))
 	{
+		shadow_remap();
+		mtrr_setup();
 		VESA_clear();
 		mouse_invalidate();
 		return TRUE;
@@ -611,8 +718,36 @@ DWORD FBHDA_palette_get(unsigned char index)
 
 #define SWAP_TESTS 1024
 
-BOOL FBHDA_swap(DWORD offset)
+static DWORD wait_off_x = 0;
+static DWORD wait_off_y = 0;
+
+BOOL FBHDA_swap(DWORD offset, DWORD flags)
 {
+	if((flags & FBHDA_SWAP_QUERY) != 0)
+	{
+		if(hda->onflip)
+		{
+			CRS_32 regs;
+			load_client_state(&regs);
+			regs.Client_EAX = VESA_CMD_DISPLAY_START;
+			regs.Client_EBX = VESA_DISPLAYSTART_GET;
+			regs.Client_ECX = 0;
+			regs.Client_EDX = 0;
+			if(!VESA_SUCC(regs))
+			{
+				hda->onflip = 0;
+				return FALSE;
+			}
+	
+			if((wait_off_x == (regs.Client_ECX & 0xFFFF)) &&
+				(wait_off_y == (regs.Client_EDX & 0xFFFF)))
+			{
+				hda->onflip = 0;
+			}
+		}
+		return TRUE;
+	}
+
 	if((offset + hda->stride) < hda->vram_size && offset >= hda->system_surface)
 	{
 		switch(screen_mode)
@@ -625,11 +760,15 @@ BOOL FBHDA_swap(DWORD offset)
 				break;
 			case SCREEN_FLIP:
 			case SCREEN_FLIP_VSYNC:
-			{
+			{				
 				CRS_32 regs;
 				DWORD off_x;
 				DWORD off_y;
-				if(fb_lock_cnt == 0)
+				if(offset == 0)
+				{
+					FBHDA_access_begin(0);
+				}
+				else if(fb_lock_cnt == 0)
 				{
 					mouse_erase();
 				}
@@ -645,30 +784,44 @@ BOOL FBHDA_swap(DWORD offset)
 				vesa_bios(&regs);
 				if(VESA_SUCC(regs))
 				{
-					/* wait until is set */
-					DWORD test_off_x, test_off_y;
-					DWORD nums_test = 0;
-					do
+					if((flags & FBHDA_SWAP_NOWAIT) == 0)
 					{
-						regs.Client_EAX = VESA_CMD_DISPLAY_START;
-						regs.Client_EBX = VESA_DISPLAYSTART_GET;
-						regs.Client_ECX = 0;
-						regs.Client_EDX = 0;
-						if(!VESA_SUCC(regs))
+						/* wait until is set */
+						DWORD test_off_x, test_off_y;
+						DWORD nums_test = 0;
+						do
 						{
-							break;
-						}
-						if(++nums_test > SWAP_TESTS)
-						{
-							break;
-						}
-						test_off_x = regs.Client_ECX & 0xFFFF;
-						test_off_y = regs.Client_EDX & 0xFFFF;
-					} while((test_off_x != off_x) || (test_off_y != off_y));
+							regs.Client_EAX = VESA_CMD_DISPLAY_START;
+							regs.Client_EBX = VESA_DISPLAYSTART_GET;
+							regs.Client_ECX = 0;
+							regs.Client_EDX = 0;
+							if(!VESA_SUCC(regs))
+							{
+								break;
+							}
+							if(++nums_test > SWAP_TESTS)
+							{
+								break;
+							}
+							test_off_x = regs.Client_ECX & 0xFFFF;
+							test_off_y = regs.Client_EDX & 0xFFFF;
+						} while((test_off_x != off_x) || (test_off_y != off_y));
+						hda->onflip = 0;
+					}
+					else
+					{
+						hda->onflip = 1;
+					}
+					wait_off_x = off_x;
+					wait_off_y = off_y;
 				}
 				hda->surface = offset;
 
-				if(fb_lock_cnt == 0)
+				if(offset == 0)
+				{
+					FBHDA_access_end(0);
+				}
+				else if(fb_lock_cnt == 0)
 				{
 					mouse_blit();
 				}
@@ -695,9 +848,41 @@ static inline void update_rect(DWORD left, DWORD top, DWORD right, DWORD bottom)
 		rect_bottom = bottom;
 }
 
+static inline void fix_rect()
+{
+	if(rect_left > hda->width)
+		rect_left = 0;
+
+	if(rect_top > hda->height)
+		rect_top = 0;
+
+	if(rect_right > hda->width)
+		rect_right = hda->width;
+
+	if(rect_bottom > hda->height)
+		rect_bottom = hda->height;
+}
+
 void FBHDA_access_begin(DWORD flags)
 {
-	//Wait_Semaphore(hda_sem, 0);
+	if((flags & FBHDA_ACCESS_EXCLUSIVE_BEGIN) != 0)
+	{
+		if(!exclusive_mode)
+		{
+			exclusive_mode = TRUE;
+			shadow_remap();
+		}
+	}
+	else if((flags & FBHDA_ACCESS_EXCLUSIVE_END) != 0)
+	{
+		if(exclusive_mode)
+		{
+			exclusive_mode = FALSE;
+			shadow_remap();
+		}
+	}
+	
+	
 	if(fb_lock_cnt++ == 0)
 	{
 		if(flags & FBHDA_ACCESS_MOUSE_MOVE)
@@ -754,7 +939,7 @@ static void VESA_copy_rect()
 		DWORD bs = (hda->bpp + 7) >> 3;
 		DWORD line_size = (rect_right - rect_left) * bs;
 		DWORD line_start = rect_left * bs;
-		BYTE *dst = (BYTE*)hda->vram_pm32;
+		BYTE *dst = (BYTE*)hda->vram_phylin;
 		BYTE *src = ((BYTE*)hda->vram_pm32) + hda->surface;
 
 		dst += (rect_top * hda->pitch) + line_start;
@@ -792,28 +977,38 @@ void FBHDA_access_end(DWORD flags)
 			case SCREEN_EMULATED_CENTER:
 			case SCREEN_EMULATED_COPY:
 			{
-				if(rect_left > hda->width)
-					rect_left = 0;
-
-				if(rect_top > hda->height)
-					rect_top = 0;
-
-				if(rect_right > hda->width)
-					rect_right = hda->width;
-
-				if(rect_bottom > hda->height)
-					rect_bottom = hda->height;
-
+				fix_rect();
 				if(rect_left == 0 && rect_top == 0 &&
 					rect_right == hda->width && rect_bottom == hda->height)
 				{
-					memcpy(hda->vram_pm32, ((BYTE*)hda->vram_pm32)+hda->surface, hda->stride);
+					// TODO: DMA?
+					memcpy(hda->vram_phylin, ((BYTE*)hda->vram_pm32)+hda->surface, hda->stride);
 				}
 				else
 				{
 					VESA_copy_rect();
 				}
 
+				break;
+			}
+			case SCREEN_FLIP:
+			case SCREEN_FLIP_VSYNC:
+			{
+				if(hda->surface == 0)
+				{
+					fix_rect();
+					if(rect_left == 0 && rect_top == 0 &&
+						rect_right == hda->width && rect_bottom == hda->height)
+					{
+						// TODO: DMA?
+						memcpy(hda->vram_phylin, hda->vram_pm32, hda->stride);
+					}
+					else
+					{
+						VESA_copy_rect();
+					}
+				}
+				
 				break;
 			}
 		}
@@ -838,7 +1033,6 @@ void  FBHDA_overlay_unlock(DWORD flags)
 
 }
 
-static BOOL vga_mode = TRUE;
 
 void VESA_HIRES_enable()
 {

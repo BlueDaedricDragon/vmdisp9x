@@ -196,6 +196,7 @@ static void buildDDHALInfo(VMDAHAL_t __far *hal, int modeidx)
 	BOOL                can_flip;
 	WORD                heap;
 	WORD                bytes_per_pixel;
+	DWORD               stride;
 //	static DWORD    dwpFOURCCs[3];
 //	DWORD               bufpos;
 
@@ -256,13 +257,28 @@ static void buildDDHALInfo(VMDAHAL_t __far *hal, int modeidx)
 	hal->ddHALInfo.vmiData.dwNumHeaps  = 0;
 	heap = 0;
 	can_flip = hda->flags & FB_SUPPORT_FLIPING;
+	
+	stride = hda->stride;
+
+	/* VESA driver need round system surface on pages */
+	if(hda->flags & FB_VESA_MODES)
+	{
+		DWORD m;
+		stride = (hda->stride + 0x00000FFFUL) & 0xFFFF000UL;
+		m = stride % hda->pitch;
+		if(m)
+		{
+			stride += hda->pitch - m;
+		}
+	}
 
 	hal->vidMem[0].dwFlags = VIDMEM_ISLINEAR;
 	hal->vidMem[0].ddsCaps.dwCaps = 0;//DDSCAPS_OFFSCREENPLAIN; - what this memory CANNOT be used for
-	hal->vidMem[0].fpStart = hda->vram_pm32 + hda->system_surface + hda->stride;
+	hal->vidMem[0].fpStart = hda->vram_pm32 + hda->system_surface + stride;
 	hal->vidMem[0].fpEnd   = hda->vram_pm32 + hda->vram_size - hda->overlays_size - 1;
 	hal->ddHALInfo.vmiData.dwNumHeaps = 1;
 
+#if 0
 	if(hda->vram_size < hda->vram_bar_size)
 	{
 		/* on vmware is only first 16 MB regular memory, we map the "blackhole" to another heap, but driver will alocate surface in system memory */
@@ -272,6 +288,7 @@ static void buildDDHALInfo(VMDAHAL_t __far *hal, int modeidx)
 		hal->vidMem[1].ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE | DDSCAPS_OFFSCREENPLAIN;
 		hal->ddHALInfo.vmiData.dwNumHeaps = 2;
 	}
+#endif
 
 	/*
 	 * capabilities supported
